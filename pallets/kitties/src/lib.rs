@@ -34,7 +34,8 @@ pub mod pallet {
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
         KittyCreate(T::AccountId, T::KittyIndex),
-        KittyTransfer(T::AccountId, T::AccountId, T::KittyIndex)
+        KittyTransfer(T::AccountId, T::AccountId, T::KittyIndex),
+        KittySale(T::AccountId, T::KittyIndex, Option<BalanceOf<T>>),
     }
 
     #[pallet::error]
@@ -45,6 +46,7 @@ pub mod pallet {
         InvalidKittyIndex,
         BalanceLitter,
         FromSameTo,
+        NotKittySale,
     }
 
     type BalanceOf<T> =
@@ -59,6 +61,9 @@ pub mod pallet {
     #[pallet::getter(fn kitties_count)]
     pub type KittiesCount<T: Config> = StorageValue<_, T::KittyIndex>;
 
+    #[pallet::storage]
+    #[pallet::getter(fn kitties_price)]
+    pub type KittiesPrice<T: Config> = StorageMap<_, Blake2_128Concat, T::KittyIndex, Option<BalanceOf<T>>, ValueQuery>;
     #[pallet::storage]
     #[pallet::getter(fn kitties)]
     pub type Kitties<T: Config> = StorageMap<_, Blake2_128Concat, T::KittyIndex, Option<Kitty>, ValueQuery>;
@@ -151,7 +156,7 @@ pub mod pallet {
 
         //买入kitty
         #[pallet::weight(0)]
-        pub fn buy_kitty(origin: OriginFor<T>, kitty_id: T::KittyIndex, amount: BalanceOf<T>) -> DispatchResult {
+        pub fn buy_kitty(origin: OriginFor<T>, kitty_id: T::KittyIndex) -> DispatchResult {
             let who = ensure_signed(origin.clone())?;
 
             
@@ -159,16 +164,19 @@ pub mod pallet {
             let from = Owner::<T>::get(kitty_id).unwrap();
             ensure!(who.clone() != from, Error::<T>::FromSameTo);
 
+            let price = Self::kitties_price(kitty_id).ok_or(Error::<T>::NotKittySale)?;
             //判断账户中的balance大于等于交易费用
-            let account_balance = T::KittyDepositBase::get();//T::Currency::reserved_balance(&who);
-            ensure!(amount < account_balance, Error::<T>::BalanceLitter);
-
+            let reserve = T::KittyDepositBase::get();
+           
+            T::Currency::reserve(&who, reserve).map_err(|_| Error::<T>::BalanceLitter)?;
+            T::Currency::unreserve(&from, reserve); 
             T::Currency::transfer(
                 &who,
                 &from,
-                amount,
+                price,
                 ExistenceRequirement::KeepAlive,
             )?;
+            KittiesPrice::<T>::remove(kitty_id);
             Owner::<T>::insert(kitty_id, Some(who.clone()));
 
             Self::deposit_event(Event::KittyTransfer(from, who, kitty_id));
@@ -178,22 +186,13 @@ pub mod pallet {
 
         //卖出kitty
         #[pallet::weight(0)]
-        pub fn sell_kitty(origin: OriginFor<T>, to: T::AccountId, kitty_id: T::KittyIndex, amount: BalanceOf<T>) -> DispatchResult {
+        pub fn sell_kitty(origin: OriginFor<T>, kitty_id: T::KittyIndex, amount: Option<BalanceOf<T>>) -> DispatchResult {
             let who = ensure_signed(origin)?;
 
-            ensure!(Kitties::<T>::contains_key(kitty_id), Error::<T>::InvalidKittyIndex);
             ensure!(Some(who.clone()) == Owner::<T>::get(kitty_id), Error::<T>::FromSameTo);
 
-            T::Currency::transfer(
-                &to,
-                &who,
-                amount,
-                ExistenceRequirement::KeepAlive,
-            )?;
-
-            Owner::<T>::insert(kitty_id, Some(to.clone()));
-
-            Self::deposit_event(Event::KittyTransfer(who, to, kitty_id));
+            KittiesPrice::<T>::mutate_exists(kitty_id, |p| *p = Some(amount));
+            Self::deposit_event(Event::KittySale(who, kitty_id, amount));
 
             Ok(())
         }

@@ -70,7 +70,10 @@ fn breed_failed() {
 fn buy_kitty_work() {
 	new_test_ext().execute_with(|| {
 		assert_ok!(KittyModule::create(Origin::signed(1)));
-		assert_ok!(KittyModule::buy_kitty(Origin::signed(2), 1, 100));
+		assert_ok!(KittyModule::sell_kitty(Origin::signed(1), 1, Some(100)));
+
+		assert_ok!(KittyModule::buy_kitty(Origin::signed(2), 1));
+		assert_eq!(KittiesPrice::<Test>::contains_key(1), false);
 	})
 }
 
@@ -78,12 +81,15 @@ fn buy_kitty_work() {
 fn buy_kitty_failed() {
 	new_test_ext().execute_with(|| {
 		//测试kitty id 无效
-		assert_noop!(KittyModule::buy_kitty(Origin::signed(1), 1, 100), Error::<Test>::InvalidKittyIndex);
+		assert_noop!(KittyModule::buy_kitty(Origin::signed(1), 1), Error::<Test>::InvalidKittyIndex);
 		//测试owner
 		assert_ok!(KittyModule::create(Origin::signed(1)));
-		assert_noop!(KittyModule::buy_kitty(Origin::signed(1), 1, 100), Error::<Test>::FromSameTo);
-
-		assert_noop!(KittyModule::buy_kitty(Origin::signed(2), 1, 1_000_000_000), Error::<Test>::BalanceLitter);
+		assert_noop!(KittyModule::buy_kitty(Origin::signed(1), 1), Error::<Test>::FromSameTo);
+		//测试没有可购买时
+		assert_noop!(KittyModule::buy_kitty(Origin::signed(2), 1), Error::<Test>::NotKittySale);
+		//测试没有balance
+		assert_ok!(KittyModule::sell_kitty(Origin::signed(1), 1, Some(100)));
+		assert_noop!(KittyModule::buy_kitty(Origin::signed(3), 1), Error::<Test>::BalanceLitter);
 	})
 }
 
@@ -91,17 +97,13 @@ fn buy_kitty_failed() {
 fn sell_kitty_work() {
 	new_test_ext().execute_with(|| {
 		assert_ok!(KittyModule::create(Origin::signed(1)));
-		assert_ok!(KittyModule::sell_kitty(Origin::signed(1), 2, 1, 100));
+		assert_ok!(KittyModule::sell_kitty(Origin::signed(1), 1, Some(100)));
 	})
 }
 
 #[test]
 fn sell_kitty_failed() {
 	new_test_ext().execute_with(|| {
-		//测试kitty id 无效
-		assert_noop!(KittyModule::sell_kitty(Origin::signed(1), 2, 1, 100), Error::<Test>::InvalidKittyIndex);
-		//测试owner
-		assert_ok!(KittyModule::create(Origin::signed(1)));
-		assert_noop!(KittyModule::sell_kitty(Origin::signed(2), 1, 1, 100), Error::<Test>::FromSameTo);
+		assert_noop!(KittyModule::sell_kitty(Origin::signed(1), 1, Some(100)), Error::<Test>::FromSameTo);
 	})
 }
