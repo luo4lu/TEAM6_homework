@@ -269,6 +269,7 @@ impl pallet_sudo::Config for Runtime {
 
 parameter_types! {
 	pub const ProofLenght: u64 = 5;
+	pub const KittyDepositBase: u32 = 1_000;
 }
 /// Configure the pallet-template in pallets/template.
 impl pallet_poe::Config for Runtime {
@@ -280,7 +281,8 @@ impl pallet_kitties::Config for Runtime {
 	type Event = Event;
 	type Randomness = RandomnessCollectiveFlip;
 	type KittyIndex = Index;
-	//type Balance = Balance;
+	type Currency = Balances;
+	type KittyDepositBase = KittyDepositBase;
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.

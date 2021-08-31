@@ -8,7 +8,7 @@ mod tests;
 
 #[frame_support::pallet]
 pub mod pallet {
-    use frame_support::{pallet_prelude::*, traits::Randomness};
+    use frame_support::{pallet_prelude::*, traits::{Randomness, ReservableCurrency, Currency, ExistenceRequirement}};
     use frame_system::pallet_prelude::*;
     use sp_runtime::traits::{AtLeast32Bit, MaybeDisplay, Bounded};
     use codec::{Encode, Decode};
@@ -17,7 +17,6 @@ pub mod pallet {
 
     #[derive(Encode, Decode)]
     pub struct Kitty(pub [u8;16]);
-
     //type KittyIndex = u32;
 
     #[pallet::config]
@@ -26,7 +25,8 @@ pub mod pallet {
         type Randomness: Randomness<Self::Hash, Self::BlockNumber>;
         type KittyIndex: Parameter + Member + MaybeSerializeDeserialize + Debug + Default + MaybeDisplay + AtLeast32Bit
         + Copy + Encode;
-      //  type Balance: Member + Parameter + AtLeast32BitUnsigned + Default + Copy;
+        type Currency: Currency<Self::AccountId> + ReservableCurrency<Self::AccountId>;
+        type KittyDepositBase: Get<BalanceOf<Self>>;
     }
 
     #[pallet::event]
@@ -44,22 +44,16 @@ pub mod pallet {
         SameParentIndex,
         InvalidKittyIndex,
         BalanceLitter,
+        FromSameTo,
     }
 
+    type BalanceOf<T> =
+	<<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
+
+    
     #[pallet::pallet]
     #[pallet::generate_store(pub(super) trait Store)]
     pub struct Pallet<T>(_);
-
-    //创建时质押token 对应AccountId
-    #[pallet::storage]
-    #[pallet::getter(fn get_balance)]
-    pub type BalanceToAccount<T: Config> = StorageMap<
-        _,
-        Blake2_128Concat,
-        T::AccountId,
-        T::Balance,
-        ValueQuery
-    >;
 
     #[pallet::storage]
     #[pallet::getter(fn kitties_count)]
@@ -76,7 +70,7 @@ pub mod pallet {
     #[pallet::call]
     impl<T: Config> Pallet<T> {
         #[pallet::weight(0)]
-        pub fn create(origin: OriginFor<T>, amount: T::Balance) -> DispatchResult {
+        pub fn create(origin: OriginFor<T>) -> DispatchResult {
             let who = ensure_signed(origin)?;
 
             let kitty_id = match Self::kitties_count() {
@@ -89,11 +83,12 @@ pub mod pallet {
                     1u32.into()
                 }
             };
+            let deposit = T::KittyDepositBase::get();
+            T::Currency::reserve(&who,deposit.clone()).map_err(|_| Error::<T>::BalanceLitter)?;
             let dna = Self::random_value(&who);
 
             Kitties::<T>::insert(kitty_id, Some(Kitty(dna)));
             Owner::<T>::insert(kitty_id, Some(who.clone()));
-            BalanceToAccount::<T>::insert(who.clone(), amount);
 
             KittiesCount::<T>::put(kitty_id+1u32.into());
 
@@ -126,7 +121,6 @@ pub mod pallet {
             
             let kitty_id = match Self::kitties_count() {
                 Some(id) => {
-                   // let index = T::KittyIndex::get();
                     ensure!(id != T::KittyIndex::max_value(), Error::<T>::KittiesCountOverflow);
                     id
                 },
@@ -157,40 +151,45 @@ pub mod pallet {
 
         //买入kitty
         #[pallet::weight(0)]
-        pub fn buy_kitty(origin: OriginFor<T>, from: T::AccountId, kitty_id: T::KittyIndex, amount: T::Balance) -> DispatchResult {
-            let who = ensure_signed(origin)?;
+        pub fn buy_kitty(origin: OriginFor<T>, kitty_id: T::KittyIndex, amount: BalanceOf<T>) -> DispatchResult {
+            let who = ensure_signed(origin.clone())?;
 
-            ensure!(Some(who.clone()) == Owner::<T>::get(kitty_id), Error::<T>::NotOwner);
+            
+            ensure!(Kitties::<T>::contains_key(kitty_id), Error::<T>::InvalidKittyIndex);
+            let from = Owner::<T>::get(kitty_id).unwrap();
+            ensure!(who.clone() != from, Error::<T>::FromSameTo);
+
             //判断账户中的balance大于等于交易费用
-            let account_balance = Self::get_balance(who.clone());
+            let account_balance = T::KittyDepositBase::get();//T::Currency::reserved_balance(&who);
             ensure!(amount < account_balance, Error::<T>::BalanceLitter);
-            let from_balance = Self::get_balance(from.clone());
 
-            //对应的账户增加balance
-            BalanceToAccount::<T>::insert(who.clone(), account_balance-amount);
-            BalanceToAccount::<T>::insert(from.clone(), from_balance+amount);
+            T::Currency::transfer(
+                &who,
+                &from,
+                amount,
+                ExistenceRequirement::KeepAlive,
+            )?;
+            Owner::<T>::insert(kitty_id, Some(who.clone()));
 
-            Owner::<T>::insert(kitty_id, Some(from.clone()));
-
-            Self::deposit_event(Event::KittyTransfer(who, from, kitty_id));
+            Self::deposit_event(Event::KittyTransfer(from, who, kitty_id));
 
             Ok(())
         }
 
         //卖出kitty
         #[pallet::weight(0)]
-        pub fn sell_kitty(origin: OriginFor<T>, to: T::AccountId, kitty_id: T::KittyIndex, amount: T::Balance) -> DispatchResult {
+        pub fn sell_kitty(origin: OriginFor<T>, to: T::AccountId, kitty_id: T::KittyIndex, amount: BalanceOf<T>) -> DispatchResult {
             let who = ensure_signed(origin)?;
 
-            ensure!(Some(who.clone()) == Owner::<T>::get(kitty_id), Error::<T>::NotOwner);
-            //判断账户中的balance大于等于交易费用
-            let to_balance = Self::get_balance(to.clone());
-            ensure!(amount > to_balance, Error::<T>::BalanceLitter);
-            let account_balance = Self::get_balance(who.clone());
+            ensure!(Kitties::<T>::contains_key(kitty_id), Error::<T>::InvalidKittyIndex);
+            ensure!(Some(who.clone()) == Owner::<T>::get(kitty_id), Error::<T>::FromSameTo);
 
-            //对应的账户增加balance
-            BalanceToAccount::<T>::insert(who.clone(), account_balance+amount);
-            BalanceToAccount::<T>::insert(to.clone(), to_balance-amount);
+            T::Currency::transfer(
+                &to,
+                &who,
+                amount,
+                ExistenceRequirement::KeepAlive,
+            )?;
 
             Owner::<T>::insert(kitty_id, Some(to.clone()));
 
