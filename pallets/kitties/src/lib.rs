@@ -85,7 +85,7 @@ pub mod pallet {
                     id
                 },
                 None => {
-                    1u32.into()
+                    0u32.into()
                 }
             };
             let deposit = T::KittyDepositBase::get();
